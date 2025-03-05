@@ -1,12 +1,59 @@
 import React, { useState, useEffect, useRef } from 'react';
+
+// スキャナーのフォールバック実装
+const FallbackBarcodeScanner = ({ onScan }) => {
+  // 実際のバーコードスキャン機能がない場合のテスト用インターフェイス
+  const [manualCode, setManualCode] = useState('');
+  
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (manualCode.trim()) {
+      onScan(manualCode.trim());
+    }
+  };
+  
+  return (
+    <div className="bg-black text-white p-4 rounded-lg text-center">
+      <h3 className="mb-2">スキャナーが利用できません</h3>
+      <p className="text-sm mb-4">このデバイスではバーコードスキャナーを初期化できません。代わりにコードを入力してください。</p>
+      
+      <form onSubmit={handleSubmit} className="flex">
+        <input
+          type="text"
+          value={manualCode}
+          onChange={(e) => setManualCode(e.target.value)}
+          placeholder="バーコード番号を入力"
+          className="flex-1 p-2 text-black rounded-l"
+        />
+        <button 
+          type="submit"
+          className="bg-blue-500 px-4 py-2 rounded-r"
+        >
+          送信
+        </button>
+      </form>
+    </div>
+  );
+};
+
 // html5-qrcode ライブラリを動的にインポート
 let Html5Qrcode;
 if (typeof window !== 'undefined') {
-  import('html5-qrcode').then(module => {
-    Html5Qrcode = module.Html5Qrcode;
-  }).catch(error => {
-    console.error('Html5Qrcode ライブラリのロードに失敗しました:', error);
-  });
+  // グローバルにHTML5QRCodeのインポートを試行
+  window.loadHtml5QrcodeSdk = async () => {
+    try {
+      const module = await import('html5-qrcode');
+      Html5Qrcode = module.Html5Qrcode;
+      console.log('Html5Qrcode ライブラリのロード成功 (グローバル)');
+      return Html5Qrcode;
+    } catch (error) {
+      console.error('Html5Qrcode ライブラリのロードに失敗しました:', error);
+      return null;
+    }
+  };
+  
+  // 先行ロード
+  window.loadHtml5QrcodeSdk();
 }
 
 const InventoryApp = () => {
@@ -75,13 +122,15 @@ const InventoryApp = () => {
   const startCamera = async () => {
     try {
       setCameraError(null);
+      setMessage('カメラを準備中...');
       
       // ライブラリが読み込まれているか確認
-      if (!Html5Qrcode) {
+      if (typeof Html5Qrcode === 'undefined') {
         // 動的にインポート
         try {
           const module = await import('html5-qrcode');
           Html5Qrcode = module.Html5Qrcode;
+          console.log('Html5Qrcode ライブラリのロード成功');
         } catch (importError) {
           console.error('Html5Qrcode ライブラリのロードに失敗:', importError);
           setCameraError('スキャナーライブラリのロードに失敗しました');
@@ -89,85 +138,113 @@ const InventoryApp = () => {
         }
       }
       
-      // DOMが完全に読み込まれるまで少し待機
-      setTimeout(() => {
+      // DOMレンダリングを確実にするためRAFを使用
+      requestAnimationFrame(async () => {
         try {
           const readerElement = document.getElementById("qr-reader");
           if (!readerElement) {
+            console.error('スキャナー要素が見つかりません');
             setMessage('スキャナー要素が見つかりません。ページを再読み込みしてください');
             return;
           }
           
-          // スキャナーのインスタンス作成
-          try {
-            scannerRef.current = new Html5Qrcode("qr-reader");
-            
-            const config = { 
-              fps: 10,
-              qrbox: { width: 250, height: 150 },
-              aspectRatio: 1.0
-            };
-            
-            // HTML5QRCode.FORMATSが利用可能な場合のみ使用
-            if (Html5Qrcode.FORMATS) {
-              config.formatsToSupport = [ 
-                Html5Qrcode.FORMATS.EAN_13,
-                Html5Qrcode.FORMATS.EAN_8,
-                Html5Qrcode.FORMATS.UPC_A,
-                Html5Qrcode.FORMATS.UPC_E
-              ];
+          console.log('スキャナー要素が見つかりました:', readerElement);
+          
+          // 以前のインスタンスがあれば停止・クリア
+          if (scannerRef.current) {
+            try {
+              await scannerRef.current.stop();
+              scannerRef.current = null;
+              console.log('以前のスキャナーインスタンスをクリアしました');
+            } catch (stopError) {
+              console.warn('以前のスキャナー停止中のエラー:', stopError);
             }
+          }
+          
+          // 要素をクリーンな状態にする
+          readerElement.innerHTML = '';
+          
+          try {
+            // スキャナーインスタンスの作成
+            console.log('スキャナーインスタンスを作成します...');
+            scannerRef.current = new Html5Qrcode("qr-reader");
+            console.log('スキャナーインスタンスの作成に成功しました');
+            
+            // カメラの起動とスキャンの開始
+            await startScanning();
           } catch (initError) {
             console.error('スキャナー初期化エラー:', initError);
             setCameraError(`スキャナーの初期化に失敗しました: ${initError.message}`);
-            return;
           }
         } catch (domError) {
           console.error('DOM処理エラー:', domError);
           setCameraError(`DOM処理エラー: ${domError.message}`);
         }
-      }, 500); // 500ms待機
+      });
       
-      // スキャナーの起動処理
-      if (scannerRef.current) {
-        try {
-          // ファシングモードを使用（カメラIDより信頼性が高い）
-          await scannerRef.current.start(
-            { facingMode: "environment" }, // 背面カメラを使用
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 150 }
-            },
-            handleScanSuccess,
-            handleScanFailure
-          );
-          
-          setMessage('カメラが起動しました。JANコードをスキャン枠内にかざしてください');
-          setScanning(true);
-        } catch (startError) {
-          console.error('カメラ起動エラー:', startError);
-          
-          // 代替手段としてデフォルトカメラを試す
-          try {
-            await scannerRef.current.start(
-              true, // デフォルトカメラを使用
-              {
-                fps: 10,
-                qrbox: { width: 250, height: 150 }
-              },
-              handleScanSuccess,
-              handleScanFailure
-            );
-            
-            setMessage('カメラが起動しました（デフォルトモード）。JANコードをスキャン枠内にかざしてください');
-            setScanning(true);
-          } catch (fallbackError) {
-            throw new Error(`カメラ起動に失敗しました: ${fallbackError.message}`);
-          }
-        }
-      } else {
-        throw new Error('スキャナーが初期化されていません');
+  // スキャン開始用の分離関数
+  const startScanning = async () => {
+    if (!scannerRef.current) {
+      console.error('スキャナーが初期化されていません');
+      setCameraError('スキャナーが初期化されていません。ページを再読み込みしてください');
+      return;
+    }
+    
+    console.log('カメラの起動を開始します...');
+    
+    // カメラ設定
+    const config = {
+      fps: 10,
+      qrbox: { width: 250, height: 150 },
+      aspectRatio: 1.0
+    };
+    
+    // バーコード形式の設定
+    if (Html5Qrcode.FORMATS) {
+      config.formatsToSupport = [ 
+        Html5Qrcode.FORMATS.EAN_13,
+        Html5Qrcode.FORMATS.EAN_8,
+        Html5Qrcode.FORMATS.UPC_A,
+        Html5Qrcode.FORMATS.UPC_E
+      ];
+    }
+    
+    // カメラアクセス方法のリスト（順に試行）
+    const cameraAccessMethods = [
+      { config: { facingMode: "environment" }, name: "背面カメラ" },
+      { config: { facingMode: "user" }, name: "前面カメラ" },
+      { config: true, name: "デフォルトカメラ" }
+    ];
+    
+    let cameraStarted = false;
+    
+    // 各カメラアクセス方法を順に試行
+    for (const method of cameraAccessMethods) {
+      if (cameraStarted) break;
+      
+      try {
+        console.log(`${method.name}でカメラ起動を試みます...`);
+        await scannerRef.current.start(
+          method.config,
+          config,
+          handleScanSuccess,
+          handleScanFailure
+        );
+        
+        cameraStarted = true;
+        setMessage(`カメラが起動しました（${method.name}）。JANコードをスキャン枠内にかざしてください`);
+        setScanning(true);
+        console.log(`${method.name}でカメラ起動に成功しました`);
+      } catch (error) {
+        console.warn(`${method.name}でのカメラ起動に失敗:`, error);
       }
+    }
+    
+    if (!cameraStarted) {
+      console.error('すべてのカメラ起動方法が失敗しました');
+      setCameraError('カメラの起動に失敗しました。カメラへのアクセス許可を確認してください。');
+    }
+  };
     } catch (error) {
       console.error('カメラエラー:', error);
       setCameraError(`カメラの起動に失敗しました: ${error.message}`);
@@ -487,23 +564,35 @@ const InventoryApp = () => {
         {/* カメラビュー / スキャナー */}
         {scanning && (
           <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
-            {/* スキャン成功オーバーレイ */}
-            <div style={successOverlayStyles}></div>
-            
-            {/* スキャンライン (アニメーション) */}
-            <div style={{...scanLineStyles, top: '50%'}}></div>
-            
-            {/* Html5Qrcode のコンテナ */}
-            <div 
-              id="qr-reader" 
-              ref={scannerDivRef} 
-              style={{width: '100%', minHeight: '250px'}}
-            ></div>
-            
-            {/* ステータスインジケーター */}
-            <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
-              スキャン中...
-            </div>
+            {/* スキャナー初期化状態による条件分岐 */}
+            {scannerRef.current ? (
+              <>
+                {/* スキャン成功オーバーレイ */}
+                <div style={successOverlayStyles}></div>
+                
+                {/* スキャンライン (アニメーション) */}
+                <div style={{...scanLineStyles, top: '50%'}}></div>
+                
+                {/* Html5Qrcode のコンテナ */}
+                <div 
+                  id="qr-reader" 
+                  ref={scannerDivRef} 
+                  style={{width: '100%', minHeight: '250px'}}
+                ></div>
+                
+                {/* ステータスインジケーター */}
+                <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
+                  スキャン中...
+                </div>
+              </>
+            ) : (
+              <>
+                {/* スキャナー初期化失敗時のフォールバック */}
+                <div className="flex items-center justify-center p-4 min-h-64 w-full">
+                  <FallbackBarcodeScanner onScan={handleScanSuccess} />
+                </div>
+              </>
+            )}
           </div>
         )}
         
