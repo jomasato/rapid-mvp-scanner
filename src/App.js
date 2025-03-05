@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+// html5-qrcode ライブラリを動的にインポート
+let Html5Qrcode;
+if (typeof window !== 'undefined') {
+  import('html5-qrcode').then(module => {
+    Html5Qrcode = module.Html5Qrcode;
+  }).catch(error => {
+    console.error('Html5Qrcode ライブラリのロードに失敗しました:', error);
+  });
+}
 
 const InventoryApp = () => {
   // 商品データの状態管理
@@ -68,34 +76,98 @@ const InventoryApp = () => {
     try {
       setCameraError(null);
       
-      if (!scannerDivRef.current) {
-        setMessage('スキャナーの初期化に失敗しました');
-        return;
+      // ライブラリが読み込まれているか確認
+      if (!Html5Qrcode) {
+        // 動的にインポート
+        try {
+          const module = await import('html5-qrcode');
+          Html5Qrcode = module.Html5Qrcode;
+        } catch (importError) {
+          console.error('Html5Qrcode ライブラリのロードに失敗:', importError);
+          setCameraError('スキャナーライブラリのロードに失敗しました');
+          return;
+        }
       }
       
-      scannerRef.current = new Html5Qrcode("qr-reader");
+      // DOMが完全に読み込まれるまで少し待機
+      setTimeout(() => {
+        try {
+          const readerElement = document.getElementById("qr-reader");
+          if (!readerElement) {
+            setMessage('スキャナー要素が見つかりません。ページを再読み込みしてください');
+            return;
+          }
+          
+          // スキャナーのインスタンス作成
+          try {
+            scannerRef.current = new Html5Qrcode("qr-reader");
+            
+            const config = { 
+              fps: 10,
+              qrbox: { width: 250, height: 150 },
+              aspectRatio: 1.0
+            };
+            
+            // HTML5QRCode.FORMATSが利用可能な場合のみ使用
+            if (Html5Qrcode.FORMATS) {
+              config.formatsToSupport = [ 
+                Html5Qrcode.FORMATS.EAN_13,
+                Html5Qrcode.FORMATS.EAN_8,
+                Html5Qrcode.FORMATS.UPC_A,
+                Html5Qrcode.FORMATS.UPC_E
+              ];
+            }
+          } catch (initError) {
+            console.error('スキャナー初期化エラー:', initError);
+            setCameraError(`スキャナーの初期化に失敗しました: ${initError.message}`);
+            return;
+          }
+        } catch (domError) {
+          console.error('DOM処理エラー:', domError);
+          setCameraError(`DOM処理エラー: ${domError.message}`);
+        }
+      }, 500); // 500ms待機
       
-      const config = { 
-        fps: 10,
-        qrbox: { width: 250, height: 150 },
-        aspectRatio: 1.0,
-        formatsToSupport: [ 
-          Html5Qrcode.FORMATS.EAN_13,
-          Html5Qrcode.FORMATS.EAN_8,
-          Html5Qrcode.FORMATS.UPC_A,
-          Html5Qrcode.FORMATS.UPC_E
-        ]
-      };
-      
-      await scannerRef.current.start(
-        { facingMode: "environment" }, 
-        config,
-        handleScanSuccess,
-        handleScanFailure
-      );
-      
-      setMessage('カメラが起動しました。JANコードをスキャン枠内にかざしてください');
-      setScanning(true);
+      // スキャナーの起動処理
+      if (scannerRef.current) {
+        try {
+          // ファシングモードを使用（カメラIDより信頼性が高い）
+          await scannerRef.current.start(
+            { facingMode: "environment" }, // 背面カメラを使用
+            {
+              fps: 10,
+              qrbox: { width: 250, height: 150 }
+            },
+            handleScanSuccess,
+            handleScanFailure
+          );
+          
+          setMessage('カメラが起動しました。JANコードをスキャン枠内にかざしてください');
+          setScanning(true);
+        } catch (startError) {
+          console.error('カメラ起動エラー:', startError);
+          
+          // 代替手段としてデフォルトカメラを試す
+          try {
+            await scannerRef.current.start(
+              true, // デフォルトカメラを使用
+              {
+                fps: 10,
+                qrbox: { width: 250, height: 150 }
+              },
+              handleScanSuccess,
+              handleScanFailure
+            );
+            
+            setMessage('カメラが起動しました（デフォルトモード）。JANコードをスキャン枠内にかざしてください');
+            setScanning(true);
+          } catch (fallbackError) {
+            throw new Error(`カメラ起動に失敗しました: ${fallbackError.message}`);
+          }
+        }
+      } else {
+        throw new Error('スキャナーが初期化されていません');
+      }
     } catch (error) {
       console.error('カメラエラー:', error);
       setCameraError(`カメラの起動に失敗しました: ${error.message}`);
