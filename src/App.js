@@ -118,6 +118,9 @@ const InventoryApp = () => {
     }
   };
 
+  // スキャナコンテナIDを一意にする（重複を避けるため）
+  const SCANNER_CONTAINER_ID = "scanner-container-" + Math.random().toString(36).substring(2, 9);
+  
   // カメラ起動処理
   const startCamera = async () => {
     try {
@@ -126,10 +129,29 @@ const InventoryApp = () => {
       
       // ライブラリが読み込まれているか確認
       if (typeof Html5Qrcode === 'undefined') {
-        // 動的にインポート
+        // 動的にインポートを試みる
         try {
-          const module = await import('html5-qrcode');
-          Html5Qrcode = module.Html5Qrcode;
+          // CDNからの読み込みを試みる（npmのインポートに問題がある場合の代替手段）
+          if (typeof window !== 'undefined' && !window.Html5Qrcode) {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/html5-qrcode@2.3.4/html5-qrcode.min.js';
+            script.async = true;
+            
+            // スクリプトの読み込み完了を待つ
+            await new Promise((resolve, reject) => {
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+            
+            // グローバル変数から取得
+            Html5Qrcode = window.Html5Qrcode;
+          } else {
+            // npmモジュールからのインポート
+            const module = await import('html5-qrcode');
+            Html5Qrcode = module.Html5Qrcode;
+          }
+          
           console.log('Html5Qrcode ライブラリのロード成功');
         } catch (importError) {
           console.error('Html5Qrcode ライブラリのロードに失敗:', importError);
@@ -139,13 +161,42 @@ const InventoryApp = () => {
       }
       
       // DOMレンダリングを確実にするためRAFを使用
-      requestAnimationFrame(async () => {
+      setTimeout(async () => {
         try {
-          const readerElement = document.getElementById("qr-reader");
+          // スキャナー要素が存在するか確認する
+          let readerElement = document.getElementById(SCANNER_CONTAINER_ID);
+          
           if (!readerElement) {
-            console.error('スキャナー要素が見つかりません');
-            setMessage('スキャナー要素が見つかりません。ページを再読み込みしてください');
-            return;
+            console.error(`スキャナー要素 '${SCANNER_CONTAINER_ID}' が見つかりません`);
+            
+            // DOM内に存在する要素を確認（デバッグ用）
+            console.log('利用可能なスキャナー要素を検索中...');
+            const possibleElements = document.querySelectorAll('[id*="scanner"], [id*="reader"], [id*="qr"]');
+            console.log('見つかった要素:', Array.from(possibleElements).map(el => el.id));
+            
+            // リファレンスから要素を取得しようとする
+            if (scannerDivRef.current) {
+              readerElement = scannerDivRef.current;
+              console.log('リファレンスから要素を取得しました');
+            } else {
+              // フォールバック: 新しいコンテナを作成
+              const container = document.createElement('div');
+              container.id = SCANNER_CONTAINER_ID;
+              container.style.width = '100%';
+              container.style.minHeight = '250px';
+              
+              // 適切な場所に挿入
+              const scannerContainer = document.querySelector('.mb-6.bg-black.rounded-lg');
+              if (scannerContainer) {
+                // 既存のコンテナがあれば中に挿入
+                scannerContainer.appendChild(container);
+                readerElement = container;
+                console.log('新しいスキャナーコンテナを作成しました');
+              } else {
+                setMessage('スキャナー要素を作成できません。ページを再読み込みしてください');
+                return;
+              }
+            }
           }
           
           console.log('スキャナー要素が見つかりました:', readerElement);
@@ -165,9 +216,15 @@ const InventoryApp = () => {
           readerElement.innerHTML = '';
           
           try {
+            // Safari特有の問題に対応
+            const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+            if (isSafari) {
+              console.log('Safari環境を検出しました。特別な初期化を使用します');
+            }
+            
             // スキャナーインスタンスの作成
-            console.log('スキャナーインスタンスを作成します...');
-            scannerRef.current = new Html5Qrcode("qr-reader");
+            console.log(`スキャナーインスタンスを作成します... (ID: ${readerElement.id})`);
+            scannerRef.current = new Html5Qrcode(readerElement.id);
             console.log('スキャナーインスタンスの作成に成功しました');
             
             // カメラの起動とスキャンの開始
@@ -175,6 +232,11 @@ const InventoryApp = () => {
           } catch (initError) {
             console.error('スキャナー初期化エラー:', initError);
             setCameraError(`スキャナーの初期化に失敗しました: ${initError.message}`);
+            
+            // Safari特有のエラーのチェック
+            if (initError.message && initError.message.includes('permission')) {
+              setCameraError('カメラの許可が拒否されました。ブラウザの設定でカメラへのアクセスを許可してください。');
+            }
           }
         } catch (domError) {
           console.error('DOM処理エラー:', domError);
@@ -575,7 +637,7 @@ const InventoryApp = () => {
                 
                 {/* Html5Qrcode のコンテナ */}
                 <div 
-                  id="qr-reader" 
+                  id={SCANNER_CONTAINER_ID}
                   ref={scannerDivRef} 
                   style={{width: '100%', minHeight: '250px'}}
                 ></div>
