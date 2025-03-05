@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Html5Qrcode } from 'html5-qrcode';
 
 const InventoryApp = () => {
   // 商品データの状態管理
@@ -15,8 +16,10 @@ const InventoryApp = () => {
   const [scanning, setScanning] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [message, setMessage] = useState('「スキャン開始」ボタンでカメラを起動するか、JANコードを手動入力できます');
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+  const [lastScanTime, setLastScanTime] = useState(0); // スキャン連続検出を防止
+  const [scanSuccess, setScanSuccess] = useState(false); // スキャン成功時のフィードバック用
+  const scannerRef = useRef(null);
+  const scannerDivRef = useRef(null);
   
   // JANCodeLookup APIを使った商品情報検索関数
   const [apiKey, setApiKey] = useState(localStorage.getItem('janLookupApiKey') || '');
@@ -64,20 +67,35 @@ const InventoryApp = () => {
   const startCamera = async () => {
     try {
       setCameraError(null);
-      const constraints = {
-        video: { 
-          facingMode: 'environment', // 背面カメラを優先
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setMessage('カメラが起動しました。JANコードをカメラにかざしてください');
-        setScanning(true);
+      
+      if (!scannerDivRef.current) {
+        setMessage('スキャナーの初期化に失敗しました');
+        return;
       }
+      
+      scannerRef.current = new Html5Qrcode("qr-reader");
+      
+      const config = { 
+        fps: 10,
+        qrbox: { width: 250, height: 150 },
+        aspectRatio: 1.0,
+        formatsToSupport: [ 
+          Html5Qrcode.FORMATS.EAN_13,
+          Html5Qrcode.FORMATS.EAN_8,
+          Html5Qrcode.FORMATS.UPC_A,
+          Html5Qrcode.FORMATS.UPC_E
+        ]
+      };
+      
+      await scannerRef.current.start(
+        { facingMode: "environment" }, 
+        config,
+        handleScanSuccess,
+        handleScanFailure
+      );
+      
+      setMessage('カメラが起動しました。JANコードをスキャン枠内にかざしてください');
+      setScanning(true);
     } catch (error) {
       console.error('カメラエラー:', error);
       setCameraError(`カメラの起動に失敗しました: ${error.message}`);
@@ -86,60 +104,72 @@ const InventoryApp = () => {
   };
 
   // カメラ停止処理
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      setScanning(false);
-      setMessage('カメラを停止しました');
+  const stopCamera = async () => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop();
+        scannerRef.current = null;
+        setScanning(false);
+        setMessage('カメラを停止しました');
+      } catch (error) {
+        console.error('カメラ停止エラー:', error);
+      }
     }
   };
 
-  // バーコードスキャン処理
-  const scanBarcode = () => {
-    if (!scanning || !videoRef.current || !canvasRef.current) return;
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-
-    // ビデオが再生可能な状態か確認
-    if (video.readyState !== video.HAVE_ENOUGH_DATA) {
-      requestAnimationFrame(scanBarcode);
+  // スキャン成功時のハンドラ
+  const handleScanSuccess = async (decodedText) => {
+    // 連続スキャン防止 (1秒以内の連続スキャンを無視)
+    const now = Date.now();
+    if (now - lastScanTime < 1000) {
       return;
     }
-
-    // カメラの映像サイズをキャンバスにセット
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    setLastScanTime(now);
     
-    // カメラ映像をキャンバスに描画
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // スキャン成功エフェクト
+    setScanSuccess(true);
+    setTimeout(() => setScanSuccess(false), 1000);
+    
+    // バイブレーション (対応デバイスのみ)
+    if (navigator.vibrate) {
+      navigator.vibrate(100);
+    }
+    
+    // 効果音
+    const audio = new Audio('/beep.mp3');
+    audio.play().catch(e => console.log('効果音再生エラー:', e));
     
     try {
-      // ここでバーコード検出のロジックを入れる
-      // 実際の実装ではZXingなどのライブラリを使用することをお勧めします
-      // ここでは簡略化のためモックを使います
+      setMessage(`JAN: ${decodedText} を読み取りました。商品名を検索中...`);
+      setCurrentProduct({
+        ...currentProduct,
+        janCode: decodedText,
+      });
       
-      // TODO: 実際のバーコードスキャン処理
-
-      // スキャン継続
-      requestAnimationFrame(scanBarcode);
+      const productName = await fetchProductName(decodedText);
+      const isDuplicate = products.some(product => product.janCode === decodedText);
+      
+      setCurrentProduct({
+        ...currentProduct,
+        janCode: decodedText,
+        productName,
+        scannedAt: new Date().toISOString()
+      });
+      
+      if (isDuplicate) {
+        setMessage(`⚠️ この商品 (${productName}) は既に登録されています`);
+      } else {
+        setMessage(`商品名: ${productName} が見つかりました。数量を入力してください。`);
+      }
     } catch (error) {
-      console.error('スキャンエラー:', error);
-      setMessage(`スキャンエラー: ${error.message}`);
-      requestAnimationFrame(scanBarcode);
+      setMessage(`エラー: ${error.message}`);
     }
   };
 
-  // バーコードスキャン開始
-  useEffect(() => {
-    if (scanning) {
-      const intervalId = setInterval(scanBarcode, 500); // 500msごとにスキャン処理
-      return () => clearInterval(intervalId);
-    }
-  }, [scanning]);
+  // スキャン失敗時のハンドラ (エラーではなく未検出の場合)
+  const handleScanFailure = (error) => {
+    // エラーではなく単にコードが検出されていない場合は何もしない
+  };
 
   // JANコードの手動検索処理
   const handleManualSearch = async () => {
@@ -262,6 +292,15 @@ const InventoryApp = () => {
     localStorage.setItem('inventoryProducts', JSON.stringify(products));
   }, [products]);
 
+  // クリーンアップ
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(err => console.error('停止エラー:', err));
+      }
+    };
+  }, []);
+
   // APIキー設定モーダル
   const ApiKeyModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -299,6 +338,36 @@ const InventoryApp = () => {
       </div>
     </div>
   );
+
+  // スキャナークラスの設定
+  const scannerStyles = {
+    position: 'relative',
+    width: '100%',
+    borderRadius: '0.5rem',
+    overflow: 'hidden',
+  };
+  
+  // スキャン成功時のオーバーレイ
+  const successOverlayStyles = {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: 'rgba(16, 185, 129, 0.3)',
+    zIndex: 10,
+    display: scanSuccess ? 'block' : 'none',
+    animation: 'pulse 1s',
+  };
+  
+  // スキャンラインのスタイル
+  const scanLineStyles = {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: '2px',
+    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+    boxShadow: '0 0 4px rgba(59, 130, 246, 0.8)',
+    zIndex: 5,
+    animation: scanning ? 'scanLine 2s infinite ease-in-out' : 'none',
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
@@ -343,23 +412,43 @@ const InventoryApp = () => {
           </button>
         </div>
         
-        {/* カメラビュー */}
+        {/* カメラビュー / スキャナー */}
         {scanning && (
-          <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg relative">
-            <video 
-              ref={videoRef} 
-              className="w-full h-64 object-cover"
-              autoPlay 
-              playsInline
-              onCanPlay={() => setMessage('JANコードをカメラにかざしてください')}
-            />
-            <canvas ref={canvasRef} className="hidden" />
+          <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
+            {/* スキャン成功オーバーレイ */}
+            <div style={successOverlayStyles}></div>
             
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-3/4 h-1/2 border-2 border-white opacity-80 rounded"></div>
+            {/* スキャンライン (アニメーション) */}
+            <div style={{...scanLineStyles, top: '50%'}}></div>
+            
+            {/* Html5Qrcode のコンテナ */}
+            <div 
+              id="qr-reader" 
+              ref={scannerDivRef} 
+              style={{width: '100%', minHeight: '250px'}}
+            ></div>
+            
+            {/* ステータスインジケーター */}
+            <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
+              スキャン中...
             </div>
           </div>
         )}
+        
+        {/* スキャンCSSアニメーション */}
+        <style jsx>{`
+          @keyframes scanLine {
+            0% { top: 20%; }
+            50% { top: 80%; }
+            100% { top: 20%; }
+          }
+          
+          @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 0; }
+          }
+        `}</style>
         
         {/* JANコード手動入力 */}
         <div className="mb-6 bg-white p-4 rounded-lg shadow-sm">
