@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 
 // スキャナーのフォールバック実装
 const FallbackBarcodeScanner = ({ onScan }) => {
-  // 実際のバーコードスキャン機能がない場合のテスト用インターフェイス
   const [manualCode, setManualCode] = useState('');
   
   const handleSubmit = (e) => {
@@ -38,23 +37,6 @@ const FallbackBarcodeScanner = ({ onScan }) => {
 
 // html5-qrcode ライブラリを動的にインポート
 let Html5Qrcode;
-if (typeof window !== 'undefined') {
-  // グローバルにHTML5QRCodeのインポートを試行
-  window.loadHtml5QrcodeSdk = async () => {
-    try {
-      const module = await import('html5-qrcode');
-      Html5Qrcode = module.Html5Qrcode;
-      console.log('Html5Qrcode ライブラリのロード成功 (グローバル)');
-      return Html5Qrcode;
-    } catch (error) {
-      console.error('Html5Qrcode ライブラリのロードに失敗しました:', error);
-      return null;
-    }
-  };
-  
-  // 先行ロード
-  window.loadHtml5QrcodeSdk();
-}
 
 const InventoryApp = () => {
   // 商品データの状態管理
@@ -71,10 +53,13 @@ const InventoryApp = () => {
   const [scanning, setScanning] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [message, setMessage] = useState('「スキャン開始」ボタンでカメラを起動するか、JANコードを手動入力できます');
-  const [lastScanTime, setLastScanTime] = useState(0); // スキャン連続検出を防止
-  const [scanSuccess, setScanSuccess] = useState(false); // スキャン成功時のフィードバック用
+  const [lastScanTime, setLastScanTime] = useState(0);
+  const [scanSuccess, setScanSuccess] = useState(false);
   const scannerRef = useRef(null);
   const scannerDivRef = useRef(null);
+  
+  // 固定のスキャナーコンテナID (ランダム生成しない)
+  const SCANNER_CONTAINER_ID = "barcode-scanner-container";
   
   // JANCodeLookup APIを使った商品情報検索関数
   const [apiKey, setApiKey] = useState(localStorage.getItem('janLookupApiKey') || '');
@@ -94,7 +79,6 @@ const InventoryApp = () => {
     }
     
     try {
-      // APIリクエストURL構築
       const url = `https://api.jancodelookup.com/?appId=${encodeURIComponent(apiKey)}&query=${janCode}&type=code`;
       
       const response = await fetch(url);
@@ -105,7 +89,6 @@ const InventoryApp = () => {
       
       const data = await response.json();
       
-      // APIからの応答チェック
       if (data.info && data.info.count > 0 && data.product && data.product.length > 0) {
         const product = data.product[0];
         return product.itemName || `商品名未登録(${janCode})`;
@@ -117,196 +100,130 @@ const InventoryApp = () => {
       return `検索エラー(${janCode}): ${error.message}`;
     }
   };
-
-  // スキャナコンテナIDを一意にする（重複を避けるため）
-  const SCANNER_CONTAINER_ID = "scanner-container-" + Math.random().toString(36).substring(2, 9);
   
+  // Html5Qrcode ライブラリのロード
+  const loadHtml5QrcodeLibrary = async () => {
+    if (typeof Html5Qrcode !== 'undefined') {
+      return Html5Qrcode;
+    }
+    
+    try {
+      // CDNから直接ロード (最も信頼性の高い方法)
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/html5-qrcode@2.3.4/html5-qrcode.min.js';
+      script.async = true;
+      
+      // スクリプト読み込み完了を待つ
+      await new Promise((resolve, reject) => {
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      
+      // グローバル変数から取得
+      Html5Qrcode = window.Html5Qrcode;
+      console.log('Html5Qrcode ライブラリのロード成功');
+      return Html5Qrcode;
+    } catch (error) {
+      console.error('Html5Qrcode ライブラリのロードに失敗:', error);
+      throw error;
+    }
+  };
+
   // カメラ起動処理
   const startCamera = async () => {
     try {
       setCameraError(null);
       setMessage('カメラを準備中...');
       
-      // ライブラリが読み込まれているか確認
-      if (typeof Html5Qrcode === 'undefined') {
-        // 動的にインポートを試みる
+      // スキャナー要素の確認
+      const scannerElement = document.getElementById(SCANNER_CONTAINER_ID);
+      if (!scannerElement) {
+        setCameraError('スキャナー要素が見つかりません。ページを再読み込みしてください。');
+        return;
+      }
+      
+      // 以前のスキャナーインスタンスをクリーンアップ
+      if (scannerRef.current) {
         try {
-          // CDNからの読み込みを試みる（npmのインポートに問題がある場合の代替手段）
-          if (typeof window !== 'undefined' && !window.Html5Qrcode) {
-            const script = document.createElement('script');
-            script.src = 'https://unpkg.com/html5-qrcode@2.3.4/html5-qrcode.min.js';
-            script.async = true;
-            
-            // スクリプトの読み込み完了を待つ
-            await new Promise((resolve, reject) => {
-              script.onload = resolve;
-              script.onerror = reject;
-              document.head.appendChild(script);
-            });
-            
-            // グローバル変数から取得
-            Html5Qrcode = window.Html5Qrcode;
-          } else {
-            // npmモジュールからのインポート
-            const module = await import('html5-qrcode');
-            Html5Qrcode = module.Html5Qrcode;
-          }
-          
-          console.log('Html5Qrcode ライブラリのロード成功');
-        } catch (importError) {
-          console.error('Html5Qrcode ライブラリのロードに失敗:', importError);
-          setCameraError('スキャナーライブラリのロードに失敗しました');
-          return;
+          await scannerRef.current.stop();
+          scannerRef.current = null;
+        } catch (stopError) {
+          console.warn('以前のスキャナー停止中のエラー:', stopError);
         }
       }
       
-      // DOMレンダリングを確実にするためRAFを使用
-      setTimeout(async () => {
-        try {
-          // スキャナー要素が存在するか確認する
-          let readerElement = document.getElementById(SCANNER_CONTAINER_ID);
-          
-          if (!readerElement) {
-            console.error(`スキャナー要素 '${SCANNER_CONTAINER_ID}' が見つかりません`);
-            
-            // DOM内に存在する要素を確認（デバッグ用）
-            console.log('利用可能なスキャナー要素を検索中...');
-            const possibleElements = document.querySelectorAll('[id*="scanner"], [id*="reader"], [id*="qr"]');
-            console.log('見つかった要素:', Array.from(possibleElements).map(el => el.id));
-            
-            // リファレンスから要素を取得しようとする
-            if (scannerDivRef.current) {
-              readerElement = scannerDivRef.current;
-              console.log('リファレンスから要素を取得しました');
-            } else {
-              // フォールバック: 新しいコンテナを作成
-              const container = document.createElement('div');
-              container.id = SCANNER_CONTAINER_ID;
-              container.style.width = '100%';
-              container.style.minHeight = '250px';
-              
-              // 適切な場所に挿入
-              const scannerContainer = document.querySelector('.mb-6.bg-black.rounded-lg');
-              if (scannerContainer) {
-                // 既存のコンテナがあれば中に挿入
-                scannerContainer.appendChild(container);
-                readerElement = container;
-                console.log('新しいスキャナーコンテナを作成しました');
-              } else {
-                setMessage('スキャナー要素を作成できません。ページを再読み込みしてください');
-                return;
-              }
-            }
-          }
-          
-          console.log('スキャナー要素が見つかりました:', readerElement);
-          
-          // 以前のインスタンスがあれば停止・クリア
-          if (scannerRef.current) {
-            try {
-              await scannerRef.current.stop();
-              scannerRef.current = null;
-              console.log('以前のスキャナーインスタンスをクリアしました');
-            } catch (stopError) {
-              console.warn('以前のスキャナー停止中のエラー:', stopError);
-            }
-          }
-          
-          // 要素をクリーンな状態にする
-          readerElement.innerHTML = '';
-          
-          try {
-            // Safari特有の問題に対応
-            const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-            if (isSafari) {
-              console.log('Safari環境を検出しました。特別な初期化を使用します');
-            }
-            
-            // スキャナーインスタンスの作成
-            console.log(`スキャナーインスタンスを作成します... (ID: ${readerElement.id})`);
-            scannerRef.current = new Html5Qrcode(readerElement.id);
-            console.log('スキャナーインスタンスの作成に成功しました');
-            
-            // カメラの起動とスキャンの開始
-            await startScanning();
-          } catch (initError) {
-            console.error('スキャナー初期化エラー:', initError);
-            setCameraError(`スキャナーの初期化に失敗しました: ${initError.message}`);
-            
-            // Safari特有のエラーのチェック
-            if (initError.message && initError.message.includes('permission')) {
-              setCameraError('カメラの許可が拒否されました。ブラウザの設定でカメラへのアクセスを許可してください。');
-            }
-          }
-        } catch (domError) {
-          console.error('DOM処理エラー:', domError);
-          setCameraError(`DOM処理エラー: ${domError.message}`);
-        }
-      });
-      
-  // スキャン開始用の分離関数
-  const startScanning = async () => {
-    if (!scannerRef.current) {
-      console.error('スキャナーが初期化されていません');
-      setCameraError('スキャナーが初期化されていません。ページを再読み込みしてください');
-      return;
-    }
-    
-    console.log('カメラの起動を開始します...');
-    
-    // カメラ設定
-    const config = {
-      fps: 10,
-      qrbox: { width: 250, height: 150 },
-      aspectRatio: 1.0
-    };
-    
-    // バーコード形式の設定
-    if (Html5Qrcode.FORMATS) {
-      config.formatsToSupport = [ 
-        Html5Qrcode.FORMATS.EAN_13,
-        Html5Qrcode.FORMATS.EAN_8,
-        Html5Qrcode.FORMATS.UPC_A,
-        Html5Qrcode.FORMATS.UPC_E
-      ];
-    }
-    
-    // カメラアクセス方法のリスト（順に試行）
-    const cameraAccessMethods = [
-      { config: { facingMode: "environment" }, name: "背面カメラ" },
-      { config: { facingMode: "user" }, name: "前面カメラ" },
-      { config: true, name: "デフォルトカメラ" }
-    ];
-    
-    let cameraStarted = false;
-    
-    // 各カメラアクセス方法を順に試行
-    for (const method of cameraAccessMethods) {
-      if (cameraStarted) break;
+      // スキャナー要素をクリア
+      scannerElement.innerHTML = '';
       
       try {
-        console.log(`${method.name}でカメラ起動を試みます...`);
-        await scannerRef.current.start(
-          method.config,
-          config,
-          handleScanSuccess,
-          handleScanFailure
-        );
+        // ライブラリのロード
+        await loadHtml5QrcodeLibrary();
         
-        cameraStarted = true;
-        setMessage(`カメラが起動しました（${method.name}）。JANコードをスキャン枠内にかざしてください`);
-        setScanning(true);
-        console.log(`${method.name}でカメラ起動に成功しました`);
-      } catch (error) {
-        console.warn(`${method.name}でのカメラ起動に失敗:`, error);
+        // スキャナーインスタンスの作成
+        scannerRef.current = new Html5Qrcode(SCANNER_CONTAINER_ID);
+        
+        // スキャン設定
+        const config = {
+          fps: 10,
+          qrbox: { width: 250, height: 150 },
+          aspectRatio: 1.0
+        };
+        
+        // バーコード形式の設定
+        if (Html5Qrcode.FORMATS) {
+          config.formatsToSupport = [ 
+            Html5Qrcode.FORMATS.EAN_13,
+            Html5Qrcode.FORMATS.EAN_8,
+            Html5Qrcode.FORMATS.UPC_A,
+            Html5Qrcode.FORMATS.UPC_E
+          ];
+        }
+        
+        // カメラアクセス方法のリスト（順に試行）
+        const cameraAccessMethods = [
+          { config: { facingMode: "environment" }, name: "背面カメラ" },
+          { config: { facingMode: "user" }, name: "前面カメラ" },
+          { config: true, name: "デフォルトカメラ" }
+        ];
+        
+        let cameraStarted = false;
+        
+        // 各カメラアクセス方法を順に試行
+        for (const method of cameraAccessMethods) {
+          if (cameraStarted) break;
+          
+          try {
+            console.log(`${method.name}でカメラ起動を試みます...`);
+            await scannerRef.current.start(
+              method.config,
+              config,
+              handleScanSuccess,
+              handleScanFailure
+            );
+            
+            cameraStarted = true;
+            setMessage(`カメラが起動しました（${method.name}）。JANコードをスキャン枠内にかざしてください`);
+            setScanning(true);
+            console.log(`${method.name}でカメラ起動に成功しました`);
+          } catch (error) {
+            console.warn(`${method.name}でのカメラ起動に失敗:`, error);
+          }
+        }
+        
+        if (!cameraStarted) {
+          console.error('すべてのカメラ起動方法が失敗しました');
+          setCameraError('カメラの起動に失敗しました。カメラへのアクセス許可を確認してください。');
+        }
+      } catch (initError) {
+        console.error('スキャナー初期化エラー:', initError);
+        setCameraError(`スキャナーの初期化に失敗しました: ${initError.message}`);
+        
+        // Safari特有のエラーのチェック
+        if (initError.message && initError.message.includes('permission')) {
+          setCameraError('カメラの許可が拒否されました。ブラウザの設定でカメラへのアクセスを許可してください。');
+        }
       }
-    }
-    
-    if (!cameraStarted) {
-      console.error('すべてのカメラ起動方法が失敗しました');
-      setCameraError('カメラの起動に失敗しました。カメラへのアクセス許可を確認してください。');
-    }
-  };
     } catch (error) {
       console.error('カメラエラー:', error);
       setCameraError(`カメラの起動に失敗しました: ${error.message}`);
@@ -623,40 +540,37 @@ const InventoryApp = () => {
           </button>
         </div>
         
-        {/* カメラビュー / スキャナー */}
-        {scanning && (
-          <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
-            {/* スキャナー初期化状態による条件分岐 */}
-            {scannerRef.current ? (
-              <>
-                {/* スキャン成功オーバーレイ */}
-                <div style={successOverlayStyles}></div>
-                
-                {/* スキャンライン (アニメーション) */}
-                <div style={{...scanLineStyles, top: '50%'}}></div>
-                
-                {/* Html5Qrcode のコンテナ */}
-                <div 
-                  id={SCANNER_CONTAINER_ID}
-                  ref={scannerDivRef} 
-                  style={{width: '100%', minHeight: '250px'}}
-                ></div>
-                
-                {/* ステータスインジケーター */}
-                <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
-                  スキャン中...
-                </div>
-              </>
-            ) : (
-              <>
-                {/* スキャナー初期化失敗時のフォールバック */}
-                <div className="flex items-center justify-center p-4 min-h-64 w-full">
-                  <FallbackBarcodeScanner onScan={handleScanSuccess} />
-                </div>
-              </>
-            )}
-          </div>
-        )}
+        {/* ここでスキャナーコンテナを常に表示し、固定のIDを使用する */}
+        <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
+          {scanning ? (
+            <>
+              {/* スキャン成功オーバーレイ */}
+              <div style={successOverlayStyles}></div>
+              
+              {/* スキャンライン (アニメーション) */}
+              <div style={{...scanLineStyles, top: '50%'}}></div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center p-4 min-h-64">
+              <div className="text-white text-center p-4">
+                <p>「スキャン開始」ボタンを押してカメラを起動してください</p>
+              </div>
+            </div>
+          )}
+          
+          {/* 重要な変更: スキャナーコンテナを常に表示し、固定IDを使用 */}
+          <div 
+            id={SCANNER_CONTAINER_ID}
+            ref={scannerDivRef} 
+            style={{width: '100%', minHeight: '250px'}}
+          ></div>
+          
+          {scanning && (
+            <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
+              スキャン中...
+            </div>
+          )}
+        </div>
         
         {/* スキャンCSSアニメーション */}
         <style jsx>{`
