@@ -58,6 +58,10 @@ const InventoryApp = () => {
   const scannerRef = useRef(null);
   const scannerDivRef = useRef(null);
   
+  // APIリクエスト最適化のための状態
+  const [isProcessingProduct, setIsProcessingProduct] = useState(false);
+  const [lastScannedCode, setLastScannedCode] = useState('');
+  
   // 固定のスキャナーコンテナID (ランダム生成しない)
   const SCANNER_CONTAINER_ID = "barcode-scanner-container";
   
@@ -254,6 +258,18 @@ const InventoryApp = () => {
     }
     setLastScanTime(now);
     
+    // 既に同じJANコードを処理中なら重複リクエストしない
+    if (isProcessingProduct && decodedText === lastScannedCode) {
+      // 既に処理中のコードを再スキャンした場合は効果音だけ鳴らす
+      const audio = new Audio('/beep.mp3');
+      audio.play().catch(e => console.log('効果音再生エラー:', e));
+      return;
+    }
+    
+    // 新しいコードのスキャン開始
+    setLastScannedCode(decodedText);
+    setIsProcessingProduct(true);
+    
     // スキャン成功エフェクト
     setScanSuccess(true);
     setTimeout(() => setScanSuccess(false), 1000);
@@ -269,28 +285,48 @@ const InventoryApp = () => {
     
     try {
       setMessage(`JAN: ${decodedText} を読み取りました。商品名を検索中...`);
-      setCurrentProduct({
-        ...currentProduct,
-        janCode: decodedText,
-      });
       
-      const productName = await fetchProductName(decodedText);
-      const isDuplicate = products.some(product => product.janCode === decodedText);
+      // キャッシュからの商品検索 (後で実装するキャッシュ機能用)
+      const cachedProduct = products.find(p => p.janCode === decodedText);
       
-      setCurrentProduct({
-        ...currentProduct,
-        janCode: decodedText,
-        productName,
-        scannedAt: new Date().toISOString()
-      });
-      
-      if (isDuplicate) {
-        setMessage(`⚠️ この商品 (${productName}) は既に登録されています`);
+      if (cachedProduct) {
+        // キャッシュヒット - APIリクエスト不要
+        setCurrentProduct({
+          ...cachedProduct,
+          quantity: 1, // 数量はリセット
+          scannedAt: new Date().toISOString()
+        });
+        setMessage(`商品名: ${cachedProduct.productName} が見つかりました。数量を入力してください。`);
       } else {
-        setMessage(`商品名: ${productName} が見つかりました。数量を入力してください。`);
+        // キャッシュミス - APIリクエスト
+        const productName = await fetchProductName(decodedText);
+        
+        setCurrentProduct({
+          ...currentProduct,
+          janCode: decodedText,
+          productName,
+          scannedAt: new Date().toISOString()
+        });
+        
+        const isDuplicate = products.some(product => product.janCode === decodedText);
+        if (isDuplicate) {
+          setMessage(`⚠️ この商品 (${productName}) は既に登録されています`);
+        } else {
+          setMessage(`商品名: ${productName} が見つかりました。数量を入力してください。`);
+        }
       }
+      
+      // 自動的にフォーカスを数量入力欄に移動
+      setTimeout(() => {
+        const quantityInput = document.getElementById('quantity-input');
+        if (quantityInput) {
+          quantityInput.focus();
+        }
+      }, 500);
+      
     } catch (error) {
       setMessage(`エラー: ${error.message}`);
+      setIsProcessingProduct(false);
     }
   };
 
@@ -306,24 +342,57 @@ const InventoryApp = () => {
       return;
     }
 
+    // すでに同じコードを処理中なら何もしない
+    if (isProcessingProduct && currentProduct.janCode === lastScannedCode) {
+      return;
+    }
+    
+    // 処理中フラグを設定
+    setIsProcessingProduct(true);
+    setLastScannedCode(currentProduct.janCode);
+
     try {
       setMessage(`JAN: ${currentProduct.janCode} を読み取りました。商品名を検索中...`);
-      const productName = await fetchProductName(currentProduct.janCode);
-      const isDuplicate = products.some(product => product.janCode === currentProduct.janCode);
       
-      setCurrentProduct({
-        ...currentProduct,
-        productName,
-        scannedAt: new Date().toISOString()
-      });
+      // キャッシュからの商品検索
+      const cachedProduct = products.find(p => p.janCode === currentProduct.janCode);
       
-      if (isDuplicate) {
-        setMessage(`⚠️ この商品 (${productName}) は既に登録されています`);
+      if (cachedProduct) {
+        // キャッシュヒット - APIリクエスト不要
+        setCurrentProduct({
+          ...cachedProduct,
+          quantity: 1, // 数量はリセット
+          scannedAt: new Date().toISOString()
+        });
+        setMessage(`商品名: ${cachedProduct.productName} が見つかりました。数量を入力してください。`);
       } else {
-        setMessage(`商品名: ${productName} が見つかりました。数量を入力してください。`);
+        // キャッシュミス - APIリクエスト
+        const productName = await fetchProductName(currentProduct.janCode);
+        
+        setCurrentProduct({
+          ...currentProduct,
+          productName,
+          scannedAt: new Date().toISOString()
+        });
+        
+        const isDuplicate = products.some(product => product.janCode === currentProduct.janCode);
+        if (isDuplicate) {
+          setMessage(`⚠️ この商品 (${productName}) は既に登録されています`);
+        } else {
+          setMessage(`商品名: ${productName} が見つかりました。数量を入力してください。`);
+        }
       }
+      
+      // 自動的にフォーカスを数量入力欄に移動
+      setTimeout(() => {
+        const quantityInput = document.getElementById('quantity-input');
+        if (quantityInput) {
+          quantityInput.focus();
+        }
+      }, 500);
     } catch (error) {
       setMessage(`エラー: ${error.message}`);
+      setIsProcessingProduct(false);
     }
   };
 
@@ -359,6 +428,32 @@ const InventoryApp = () => {
       expiryDate: '',
       scannedAt: ''
     });
+    
+    // 処理完了フラグをリセット
+    setIsProcessingProduct(false);
+    setLastScannedCode('');
+    
+    // スキャン再開を促すメッセージ
+    setMessage('商品を保存しました。次の商品をスキャンしてください。');
+  };
+  
+  // キャンセル処理
+  const cancelProduct = () => {
+    // 入力欄をリセット
+    setCurrentProduct({
+      janCode: '',
+      productName: '',
+      quantity: 1,
+      expiryDate: '',
+      scannedAt: ''
+    });
+    
+    // 処理完了フラグをリセット
+    setIsProcessingProduct(false);
+    setLastScannedCode('');
+    
+    // スキャン再開を促すメッセージ
+    setMessage('キャンセルしました。次の商品をスキャンしてください。');
   };
   
   // CSVエクスポート
@@ -517,59 +612,197 @@ const InventoryApp = () => {
       
       <main className="flex-1 container mx-auto p-4 max-w-3xl">
         {/* メッセージ表示エリア */}
-        <div className="bg-white p-4 mb-6 rounded-lg shadow-sm border-l-4 border-blue-500">
+        <div className="bg-white p-3 mb-3 rounded-lg shadow-sm border-l-4 border-blue-500">
           <p className="text-center text-gray-700">{message}</p>
           {cameraError && (
-            <p className="text-center text-red-500 text-sm mt-2">
+            <p className="text-center text-red-500 text-sm mt-1">
               {cameraError}
             </p>
           )}
         </div>
         
-        {/* カメラ操作エリア */}
-        <div className="mb-6">
-          <button 
-            onClick={() => scanning ? stopCamera() : startCamera()}
-            className={`w-full p-3 rounded-lg font-bold text-white shadow-sm transition-colors duration-200 ${
-              scanning 
-                ? 'bg-red-500 hover:bg-red-600' 
-                : 'bg-green-500 hover:bg-green-600'
-            }`}
-          >
-            {scanning ? 'スキャン停止' : 'スキャン開始'}
-          </button>
-        </div>
-        
-        {/* ここでスキャナーコンテナを常に表示し、固定のIDを使用する */}
-        <div className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
-          {scanning ? (
-            <>
-              {/* スキャン成功オーバーレイ */}
-              <div style={successOverlayStyles}></div>
+        {/* 2段組レイアウト - スマホでもコンパクトに全体が見えるように */}
+        <div className="flex flex-col md:flex-row md:space-x-4">
+          {/* 左側: スキャナーエリア */}
+          <div className="md:w-1/2">
+            {/* カメラ操作ボタン */}
+            <div className="mb-3">
+              <button 
+                onClick={() => scanning ? stopCamera() : startCamera()}
+                className={`w-full p-3 rounded-lg font-bold text-white shadow-sm transition-colors duration-200 ${
+                  scanning 
+                    ? 'bg-red-500 hover:bg-red-600' 
+                    : 'bg-green-500 hover:bg-green-600'
+                }`}
+              >
+                {scanning ? 'スキャン停止' : 'スキャン開始'}
+              </button>
+            </div>
+            
+            {/* スキャナーコンテナ - 高さを調整 */}
+            <div className="mb-3 bg-black rounded-lg overflow-hidden shadow-lg" style={scannerStyles}>
+              {scanning ? (
+                <>
+                  {/* スキャン成功オーバーレイ */}
+                  <div style={successOverlayStyles}></div>
+                  
+                  {/* スキャンライン (アニメーション) */}
+                  <div style={{...scanLineStyles, top: '50%'}}></div>
+                </>
+              ) : (
+                <div className="flex items-center justify-center p-4 min-h-32">
+                  <div className="text-white text-center p-2">
+                    <p>「スキャン開始」ボタンを押してカメラを起動してください</p>
+                  </div>
+                </div>
+              )}
               
-              {/* スキャンライン (アニメーション) */}
-              <div style={{...scanLineStyles, top: '50%'}}></div>
-            </>
-          ) : (
-            <div className="flex items-center justify-center p-4 min-h-64">
-              <div className="text-white text-center p-4">
-                <p>「スキャン開始」ボタンを押してカメラを起動してください</p>
+              {/* 固定IDのスキャナーコンテナ - 高さを少し小さく */}
+              <div 
+                id={SCANNER_CONTAINER_ID}
+                ref={scannerDivRef} 
+                style={{width: '100%', minHeight: '200px'}}
+              ></div>
+              
+              {scanning && (
+                <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
+                  スキャン中...
+                </div>
+              )}
+            </div>
+            
+            {/* JANコード手動入力 */}
+            <div className="mb-3 bg-white p-3 rounded-lg shadow-sm">
+              <h3 className="font-bold mb-2 text-gray-700 text-sm">JANコード手動入力</h3>
+              <div className="flex">
+                <input 
+                  type="text" 
+                  placeholder="JANコードを入力" 
+                  className="flex-1 p-2 border border-gray-300 rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setCurrentProduct({...currentProduct, janCode: e.target.value})}
+                  value={currentProduct.janCode}
+                  onKeyPress={(e) => e.key === 'Enter' && handleManualSearch()}
+                />
+                <button
+                  onClick={handleManualSearch}
+                  className="bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-r transition-colors duration-200"
+                >
+                  検索
+                </button>
               </div>
             </div>
-          )}
+          </div>
           
-          {/* 重要な変更: スキャナーコンテナを常に表示し、固定IDを使用 */}
-          <div 
-            id={SCANNER_CONTAINER_ID}
-            ref={scannerDivRef} 
-            style={{width: '100%', minHeight: '250px'}}
-          ></div>
-          
-          {scanning && (
-            <div className="absolute bottom-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
-              スキャン中...
+{/* 右側: 商品情報入力エリア */}
+<div className="md:w-1/2">
+            {currentProduct.janCode ? (
+              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-3">
+                <h2 className="font-bold mb-3 text-gray-800 border-b pb-2">商品情報</h2>
+                
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">JANコード</label>
+                  <input 
+                    type="text" 
+                    value={currentProduct.janCode} 
+                    readOnly
+                    className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                  />
+                </div>
+                
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">商品名</label>
+                  <input 
+                    type="text" 
+                    value={currentProduct.productName} 
+                    onChange={(e) => setCurrentProduct({...currentProduct, productName: e.target.value})}
+                    className="w-full p-2 border border-gray-300 rounded bg-gray-50 text-gray-600" 
+                  />
+                </div>
+                
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">数量</label>
+                  <input 
+                    id="quantity-input" // 自動フォーカス用ID
+                    type="number" 
+                    min="1"
+                    value={currentProduct.quantity} 
+                    onChange={(e) => setCurrentProduct({...currentProduct, quantity: parseInt(e.target.value) || 1})}
+                    className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">消費期限 (任意)</label>
+                  <input 
+                    type="date" 
+                    value={currentProduct.expiryDate} 
+                    onChange={(e) => setCurrentProduct({...currentProduct, expiryDate: e.target.value})}
+                    className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                  />
+                </div>
+                
+                <div className="flex space-x-2">
+                  <button 
+                    onClick={addProduct}
+                    className="flex-1 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition-colors duration-200 shadow-sm"
+                  >
+                    保存
+                  </button>
+                  <button 
+                    onClick={cancelProduct}
+                    className="p-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-bold transition-colors duration-200 shadow-sm"
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white p-4 rounded-lg shadow-sm mb-3 text-center">
+                <p className="text-gray-700">商品をスキャンまたは入力してください</p>
+              </div>
+            )}
+            
+            {/* 最近スキャンした商品リスト (コンパクト表示) */}
+            <div className="bg-white rounded-lg shadow-sm max-h-64 overflow-y-auto mb-3">
+              <div className="flex justify-between items-center p-3 border-b">
+                <h2 className="font-bold text-gray-800">最近の商品</h2>
+                <span className="text-sm text-gray-500">{products.length}件</span>
+              </div>
+              
+              {products.length === 0 ? (
+                <p className="p-4 text-center text-gray-500 text-sm">スキャンした商品がここに表示されます</p>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {products.slice(0, 5).map((product, index) => (
+                    <li key={index} className="p-2 hover:bg-gray-50 transition-colors duration-150 text-sm">
+                      <div className="flex justify-between items-center">
+                        <div className="truncate flex-1">
+                          <p className="font-medium text-gray-800 truncate">{product.productName}</p>
+                        </div>
+                        <div className="text-right ml-2">
+                          <span className="font-bold text-gray-800">{product.quantity}個</span>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                  {products.length > 5 && (
+                    <li className="p-2 text-center text-sm text-blue-600">
+                      他 {products.length - 5} 件...
+                    </li>
+                  )}
+                </ul>
+              )}
             </div>
-          )}
+            
+            {/* CSVエクスポートボタン */}
+            <button 
+              onClick={exportCSV}
+              className="w-full p-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm shadow-sm transition-colors duration-200 mb-3"
+              disabled={products.length === 0}
+            >
+              CSVエクスポート ({products.length}件)
+            </button>
+          </div>
         </div>
         
         {/* スキャンCSSアニメーション */}
@@ -587,98 +820,14 @@ const InventoryApp = () => {
           }
         `}</style>
         
-        {/* JANコード手動入力 */}
-        <div className="mb-6 bg-white p-4 rounded-lg shadow-sm">
-          <h3 className="font-bold mb-3 text-gray-700">JANコード手動入力</h3>
-          <div className="flex">
-            <input 
-              type="text" 
-              placeholder="JANコードを入力" 
-              className="flex-1 p-2 border border-gray-300 rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500"
-              onChange={(e) => setCurrentProduct({...currentProduct, janCode: e.target.value})}
-              value={currentProduct.janCode}
-              onKeyPress={(e) => e.key === 'Enter' && handleManualSearch()}
-            />
-            <button
-              onClick={handleManualSearch}
-              className="bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-r transition-colors duration-200"
-            >
-              検索
-            </button>
-          </div>
-        </div>
-        
-        {/* 商品情報入力フォーム */}
-        {currentProduct.janCode && (
-          <div className="bg-white p-5 mb-6 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="font-bold mb-4 text-gray-800 border-b pb-2">商品情報</h2>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1 text-gray-700">JANコード</label>
-              <input 
-                type="text" 
-                value={currentProduct.janCode} 
-                readOnly
-                className="w-full p-2 border border-gray-300 rounded bg-gray-50 text-gray-600" 
-              />
-            </div>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1 text-gray-700">商品名</label>
-              <input 
-                type="text" 
-                value={currentProduct.productName} 
-                onChange={(e) => setCurrentProduct({...currentProduct, productName: e.target.value})}
-                className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" 
-              />
-            </div>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1 text-gray-700">数量</label>
-              <input 
-                type="number" 
-                min="1"
-                value={currentProduct.quantity} 
-                onChange={(e) => setCurrentProduct({...currentProduct, quantity: parseInt(e.target.value) || 1})}
-                className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" 
-              />
-            </div>
-            
-            <div className="mb-5">
-              <label className="block text-sm font-medium mb-1 text-gray-700">消費期限 (任意)</label>
-              <input 
-                type="date" 
-                value={currentProduct.expiryDate} 
-                onChange={(e) => setCurrentProduct({...currentProduct, expiryDate: e.target.value})}
-                className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" 
-              />
-            </div>
-            
-            <button 
-              onClick={addProduct}
-              className="w-full p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition-colors duration-200 shadow-sm"
-            >
-              保存
-            </button>
-          </div>
-        )}
-        
-        {/* 商品リスト */}
-        <div className="mb-6">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="font-bold text-gray-800">スキャン済み商品 ({products.length})</h2>
-            <button 
-              onClick={exportCSV}
-              className="p-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm shadow-sm transition-colors duration-200"
-              disabled={products.length === 0}
-            >
-              CSVエクスポート
-            </button>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-sm max-h-80 overflow-y-auto">
+        {/* 全商品リスト (折りたたみ可能) */}
+        <details className="bg-white rounded-lg shadow-sm mb-6 mt-4">
+          <summary className="p-4 font-bold cursor-pointer">
+            全商品リスト ({products.length}件)
+          </summary>
+          <div className="max-h-80 overflow-y-auto">
             {products.length === 0 ? (
-              <p className="p-6 text-center text-gray-500">スキャンした商品がここに表示されます</p>
+              <p className="p-4 text-center text-gray-500">スキャンした商品がありません</p>
             ) : (
               <ul className="divide-y divide-gray-200">
                 {products.map((product, index) => (
@@ -712,7 +861,7 @@ const InventoryApp = () => {
               </ul>
             )}
           </div>
-        </div>
+        </details>
       </main>
       
       <footer className="bg-gray-800 text-white p-4 text-center text-sm">
