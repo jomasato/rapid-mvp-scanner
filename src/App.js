@@ -735,7 +735,7 @@ const InventoryApp = () => {
                   />
                 </div>
 
-                                {/* 売価入力欄の追加 */}
+                {/* 売価入力欄の追加 */}
                 <div className="mb-3">
                   <label className="block text-sm font-medium mb-1 text-gray-700">売価（円）</label>
                   <input 
@@ -744,6 +744,18 @@ const InventoryApp = () => {
                     step="1"
                     value={currentProduct.price} 
                     onChange={(e) => setCurrentProduct({...currentProduct, price: parseInt(e.target.value) || 0})}
+                    onFocus={(e) => {
+                      // 値が0の場合、フォーカス時に空にする
+                      if (currentProduct.price === 0) {
+                        setCurrentProduct({...currentProduct, price: ''});
+                      }
+                    }}
+                    onBlur={(e) => {
+                      // 空の場合、フォーカスが外れたら0に戻す
+                      if (e.target.value === '') {
+                        setCurrentProduct({...currentProduct, price: 0});
+                      }
+                    }}
                     className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
