@@ -45,6 +45,7 @@ const InventoryApp = () => {
     janCode: '',
     productName: '',
     quantity: 1,
+    price:0,
     expiryDate: '',
     scannedAt: ''
   });
@@ -251,9 +252,9 @@ const InventoryApp = () => {
 
   // スキャン成功時のハンドラ
   const handleScanSuccess = async (decodedText) => {
-    // 連続スキャン防止 (1秒以内の連続スキャンを無視)
+    // 連続スキャン防止 (2秒以内の連続スキャンを無視)
     const now = Date.now();
-    if (now - lastScanTime < 1000) {
+    if (now - lastScanTime < 2000) {
       return;
     }
     setLastScanTime(now);
@@ -425,6 +426,7 @@ const InventoryApp = () => {
       janCode: '',
       productName: '',
       quantity: 1,
+      price:0,
       expiryDate: '',
       scannedAt: ''
     });
@@ -444,6 +446,7 @@ const InventoryApp = () => {
       janCode: '',
       productName: '',
       quantity: 1,
+      price:0,
       expiryDate: '',
       scannedAt: ''
     });
@@ -464,7 +467,7 @@ const InventoryApp = () => {
     }
     
     // CSVヘッダー
-    const headers = ['JANコード', '商品名', '数量', '消費期限', 'スキャン日時'];
+    const headers = ['JANコード', '商品名', '数量','売価', '消費期限', 'スキャン日時'];
     
     // CSVデータの生成
     const csvContent = [
@@ -473,6 +476,7 @@ const InventoryApp = () => {
         product.janCode,
         `"${product.productName}"`, // カンマを含む場合に対応
         product.quantity,
+        product.price,
         product.expiryDate,
         product.scannedAt
       ].join(','))
@@ -730,6 +734,19 @@ const InventoryApp = () => {
                     className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
+
+                                {/* 売価入力欄の追加 */}
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">売価（円）</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    step="1"
+                    value={currentProduct.price} 
+                    onChange={(e) => setCurrentProduct({...currentProduct, price: parseInt(e.target.value) || 0})}
+                    className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
                 
                 <div className="mb-3">
                   <label className="block text-sm font-medium mb-1 text-gray-700">消費期限 (任意)</label>
@@ -781,6 +798,7 @@ const InventoryApp = () => {
                         </div>
                         <div className="text-right ml-2">
                           <span className="font-bold text-gray-800">{product.quantity}個</span>
+                          <span className="text-xs text-gray-500 ml-1">{product.price}円</span>
                         </div>
                       </div>
                     </li>
@@ -840,6 +858,7 @@ const InventoryApp = () => {
                       <div className="flex items-center">
                         <div className="text-right mr-3">
                           <p className="font-bold text-gray-800">{product.quantity}個</p>
+                          <p className="text-sm text-gray-600">{product.price}円</p>
                           {product.expiryDate && (
                             <p className="text-xs text-gray-500">
                               消費期限: {product.expiryDate}
